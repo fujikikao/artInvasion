@@ -1,0 +1,290 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI數據入侵</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #333;
+            font-family: "Microsoft JhengHei", sans-serif;
+        }
+
+    #canvas-container { position: relative; width: 100%; height: 100%; /* 背景設置 */ background-image: url('New Project.jpg'); background-size: contain; background-position: center; background-repeat: no-repeat; filter: sepia(0.2) grayscale(0.8) contrast(1.2); }
+
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        #ui-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none;
+            user-select: none;
+            backdrop-filter: blur(5px);
+            border: 1px solid #555;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        h1 {
+            font-size: 16px;
+            margin: 0 0 10px 0;
+            letter-spacing: 2px;
+            color: #fff;
+        }
+
+        p {
+            font-size: 12px;
+            color: #ddd;
+            margin: 5px 0;
+        }
+
+        .stat {
+            font-family: monospace;
+            color: #00ff9d;
+            font-weight: bold;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="artCanvas"></canvas>
+
+        <div id="loading">正在載入動態素材...</div>
+
+        <div id="ui-panel">
+            <h1>AI數據入侵</h1>
+            <p>互動方式：</p>
+            <p>👉 移動滑鼠：<span style="color:white">AI數據繁殖</span></p>
+            <p>👉 點擊畫面：<span style="color:white">強制驅散</span></p>
+            <hr style="border:0; border-top:1px solid #555;">
+            <p>當前入侵數量: <span id="count" class="stat">0</span></p>
+            <p>系統狀態: <span class="stat" id="status">LOADING...</span></p>
+        </div>
+    </div>
+
+    <script>const canvas = document.getElementById('artCanvas');
+    const ctx = canvas.getContext('2d');
+    const countDisplay = document.getElementById('count');
+    const statusDisplay = document.getElementById('status');
+    const loadingMsg = document.getElementById('loading');
+
+    let width, height;
+    let particles = [];
+    let mouse = { x: -100, y: -100 };
+    let isMouseDown = false;
+
+    // ==========================================
+    // 【動態設定區 - 請依據您的圖片修改這裡】
+    // ==========================================
+    const spriteImage = new Image();
+    let imageLoaded = false;
+
+    // 1. 替換成您的 Sprite Sheet 圖片路徑
+    // 這裡先用一個網路上的 8 格機器人走路圖當範例
+        spriteImage.src = 'Sprite.png';
+
+    // 2. 您的圖片總共有幾格動畫？(橫向排列)
+    const TOTAL_FRAMES = 8;
+
+    // 3. 動畫播放速度 (數字越大越慢)
+    const ANIMATION_SPEED = 5;
+
+    // 用來儲存計算後的單格寬度
+    let singleFrameWidth = 0;
+
+    spriteImage.onload = () => {
+        imageLoaded = true;
+        loadingMsg.style.display = 'none';
+        statusDisplay.textContent = 'ACTIVE / MONITORING';
+        statusDisplay.style.color = '#0f0';
+        // 計算單一格的實際寬度 = 總寬度 / 總格數
+        singleFrameWidth = spriteImage.naturalWidth / TOTAL_FRAMES;
+        console.log(`Sprite載入完畢。總寬: ${spriteImage.naturalWidth}, 單格寬: ${singleFrameWidth}, 高: ${spriteImage.naturalHeight}`);
+    };
+    spriteImage.onerror = () => {
+        loadingMsg.textContent = '圖片載入失敗，請檢查路徑';
+        statusDisplay.textContent = 'ERROR';
+        statusDisplay.style.color = '#f00';
+    }
+
+
+    function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ==========================================
+    // 人偶物件 (Avatar Class) - 修改為支援動畫
+    // ==========================================
+    class Avatar {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.vx = (Math.random() - 0.5) * 1.5;
+            this.vy = (Math.random() - 0.5) * 1.5;
+
+            // 大小設定 (基礎高度)
+            this.targetBaseHeight = 60;
+            this.sizeVariation = Math.random() * 0.5 + 0.8;
+
+            this.opacity = 0;
+            this.targetOpacity = Math.random() * 0.2 + 0.8;
+            // 動態版通常不需要旋轉，不然會頭暈，先註解掉
+            // this.rotation = (Math.random() - 0.5) * 0.3;
+
+            // --- 動畫相關屬性 ---
+            this.currentFrame = 0; // 目前播放到第幾格 (從0開始)
+            this.frameTimer = 0;   // 計時器
+            // 讓每個人偶的起始動作稍微錯開，比較自然
+            this.startOffset = Math.floor(Math.random() * TOTAL_FRAMES);
+        }
+
+        update() {
+            // 物理移動
+            this.x += this.vx + (Math.random() - 0.5) * 1.5;
+            this.y += this.vy + (Math.random() - 0.5) * 1.5;
+            if (this.opacity < this.targetOpacity) this.opacity += 0.05;
+            if (this.x < 0 || this.x > width) this.vx *= -1;
+            if (this.y < 0 || this.y > height) this.vy *= -1;
+
+            // --- 更新動畫影格 ---
+            this.frameTimer++;
+            // 如果計時器超過設定的速度閾值，就切換到下一格
+            if (this.frameTimer % ANIMATION_SPEED === 0) {
+                this.currentFrame = (this.currentFrame + 1) % TOTAL_FRAMES;
+            }
+        }
+
+        draw() {
+            if (!imageLoaded || singleFrameWidth === 0) return;
+
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            // ctx.rotate(this.rotation); // 暫不旋轉
+            ctx.globalAlpha = this.opacity;
+
+            // ==========================================
+            // 【核心修改：計算單格比例與複雜繪圖】
+            // ==========================================
+
+            // 1. 計算「單一格」的長寬比 (注意：是用單格寬度除以總高度)
+            let ratio = singleFrameWidth / spriteImage.naturalHeight;
+
+            // 2. 計算最終要繪製在畫布上的尺寸
+            let finalH = this.targetBaseHeight * this.sizeVariation;
+            let finalW = finalH * ratio;
+
+            // 3. 計算要從大圖中「裁切」的位置
+            // 實際要播放的格數要加上隨機偏移量，確保大家動作不同步
+            let displayFrameIndex = (this.currentFrame + this.startOffset) % TOTAL_FRAMES;
+            // 來源X座標 = 目前格數 * 單格寬度
+            let sourceX = displayFrameIndex * singleFrameWidth;
+            let sourceY = 0; // 橫向排列的話 Y 都是 0
+
+            // 4. 複雜版 drawImage (裁切並縮放繪製)
+            // 參數：圖片, 來源X, 來源Y, 來源寬, 來源高, 目標X, 目標Y, 目標寬, 目標高
+            ctx.drawImage(
+                spriteImage,
+                sourceX, sourceY, singleFrameWidth, spriteImage.naturalHeight, // 來源裁切區域
+                -finalW / 2, -finalH / 2, finalW, finalH                       // 目標繪製區域 (置中)
+            );
+
+            ctx.restore();
+        }
+    }
+
+    // 互動監聽 (滑鼠)
+    window.addEventListener('mousemove', (e) => {
+        if (!imageLoaded) return;
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+        let spawnRate = 2;
+        for(let i=0; i<spawnRate; i++) {
+             const offsetX = (Math.random() - 0.5) * 60;
+             const offsetY = (Math.random() - 0.5) * 60;
+             particles.push(new Avatar(mouse.x + offsetX, mouse.y + offsetY));
+        }
+        if(particles.length > 500) { // 動態圖片比較吃效能，數量上限稍微調低一點
+            particles.splice(0, spawnRate);
+        }
+    });
+
+    // 互動監聽 (點擊驅散)
+    window.addEventListener('mousedown', () => {
+        isMouseDown = true;
+        particles = particles.filter(() => Math.random() > 0.4);
+        particles.forEach(p => {
+            let dx = p.x - mouse.x;
+            let dy = p.y - mouse.y;
+            let dist = Math.sqrt(dx*dx + dy*dy);
+            let forceRadius = 400;
+            if(dist < forceRadius) {
+                let force = (forceRadius - dist) / forceRadius;
+                p.vx += (dx / dist) * force * 30;
+                p.vy += (dy / dist) * force * 30;
+            }
+        });
+    });
+
+    window.addEventListener('mouseup', () => { isMouseDown = false; });
+
+    // 觸控支援
+    window.addEventListener('touchmove', (e) => {
+        if (!imageLoaded) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        mouse.x = touch.clientX;
+        mouse.y = touch.clientY;
+        for(let i=0; i<2; i++) {
+             particles.push(new Avatar(mouse.x + (Math.random()-0.5)*50, mouse.y + (Math.random()-0.5)*50));
+        }
+        if(particles.length > 300) particles.splice(0, 2);
+    }, {passive: false});
+
+
+    // 動畫循環
+    function animate() {
+        ctx.clearRect(0, 0, width, height);
+        particles.forEach(p => {
+            p.update(); // 更新數據(包含動畫格數)
+            p.draw();   // 繪圖
+        });
+        countDisplay.textContent = particles.length;
+        requestAnimationFrame(animate);
+    }
+
+    animate();</script>
+
+</body>
+</html>
