@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>水墨畫 AR 互動體驗</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+        }
+
+        #camera-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            object-fit: cover;
+        }
+
+        #video-element {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scale(1.05); /* 稍微放大避免邊緣黑邊 */
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none; /* 讓點擊可以穿透（如果需要） */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 掃描框動畫 */
+        .scan-box {
+            width: 250px;
+            height: 250px;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 20px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); /* 掃描框外變暗 */
+            display: none;
+        }
+
+        .scan-line {
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(to right, transparent, #4ade80, transparent);
+            position: absolute;
+            top: 0;
+            left: 0;
+            animation: scan 2s infinite linear;
+            box-shadow: 0 0 10px #4ade80;
+        }
+
+        @keyframes scan {
+            0% { top: 0; }
+            50% { top: 100%; }
+            100% { top: 0; }
+        }
+
+        #ink-canvas {
+            /* 些微模糊與對比調整，讓字體更像暈開的墨水 */
+            filter: blur(0.5px) contrast(1.2);
+        }
+
+        .start-btn {
+            pointer-events: auto;
+            backdrop-filter: blur(5px);
+        }
+
+        #status-text {
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 相機畫面層 -->
+    <div id="camera-container">
+        <video id="video-element" autoplay playsinline muted></video>
+    </div>
+
+    <!-- 介面與互動層 -->
+    <div id="ui-layer">
+        
+        <!-- 開始按鈕 -->
+        <div id="start-screen" class="flex flex-col items-center">
+            <h1 class="text-3xl font-bold text-white mb-6 tracking-widest" style="text-shadow: 0 4px 6px rgba(0,0,0,0.5);">水墨幻境 AR</h1>
+            <p class="text-gray-200 mb-8 text-center px-6 max-w-sm" style="text-shadow: 0 2px 4px rgba(0,0,0,0.5);">
+                請允許相機權限，並將鏡頭對準您的水墨畫。
+            </p>
+            <button id="start-btn" class="start-btn bg-white/20 border border-white/50 text-white px-8 py-4 rounded-full text-lg font-semibold tracking-wider hover:bg-white/30 transition-all active:scale-95 shadow-lg">
+                開啟鏡頭並探索
+            </button>
+        </div>
+
+        <!-- 掃描畫面 -->
+        <div id="scan-screen" class="hidden flex-col items-center">
+            <div class="scan-box" id="scan-box">
+                <div class="scan-line"></div>
+            </div>
+            <p id="status-text" class="text-white text-lg mt-6 tracking-widest font-medium animate-pulse">
+                正在尋找畫作特徵...
+            </p>
+        </div>
+
+    </div>
+
+    <!-- 畫布：用於繪製大量如螞蟻般的水墨人偶 -->
+    <canvas id="ink-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none;"></canvas>
+
+    <script>
+        const startBtn = document.getElementById('start-btn');
+        const startScreen = document.getElementById('start-screen');
+        const scanScreen = document.getElementById('scan-screen');
+        const scanBox = document.getElementById('scan-box');
+        const statusText = document.getElementById('status-text');
+        const videoElement = document.getElementById('video-element');
+        
+        const canvas = document.getElementById('ink-canvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+        
+        function resizeCanvas() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        let audioCtx;
+        let isARRunning = false;
+        
+        // 載入 Sprite 圖片
+        const spriteImage = new Image();
+        spriteImage.src = 'Sprite.png';
+        const totalFrames = 8; // Sprite 總幀數 (根據圖片，共8個動作)
+        let frameWidth = 0;
+        let frameHeight = 0;
+
+        spriteImage.onload = () => {
+            frameWidth = spriteImage.width / totalFrames;
+            frameHeight = spriteImage.height;
+        };
+
+        let inkPeople = [];
+        let spawnIntervalTime = 1000; // 初始生成間隔 (毫秒)
+        let lastSpawnTime = 0;
+
+        // 新增：控制滿溢後消散的變數
+        const MAX_PEOPLE = 700;
+        let isVanishing = false;
+        let vanishStartTime = 0;
+        const VANISH_DURATION = 5000; // 5秒 (5000毫秒)消散完畢
+
+        // 五聲音階 (宮商角徵羽)，營造傳統國樂/古琴氛圍
+        const pentatonicScale = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99, 880.00];
+
+        // 啟動相機
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }, // 強制使用後置鏡頭
+                    audio: false
+                });
+                videoElement.srcObject = stream;
+                return true;
+            } catch (err) {
+                console.error("相機存取失敗: ", err);
+                // 降級處理：即使沒有相機，也顯示灰色背景讓體驗繼續
+                document.getElementById('camera-container').style.background = '#e5e5e5';
+                videoElement.style.display = 'none';
+                return true; 
+            }
+        }
+
+        // 初始化 Web Audio API 生成背景音樂
+        function initAudio() {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+            playGenerativeMusic();
+        }
+
+        // 生成式環境音樂
+        function playGenerativeMusic() {
+            if (!isARRunning || !audioCtx) return;
+
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            // 隨機選擇五聲音階中的一個音
+            const freq = pentatonicScale[Math.floor(Math.random() * pentatonicScale.length)];
+            osc.frequency.value = freq;
+            osc.type = Math.random() > 0.5 ? 'sine' : 'triangle'; // 柔和的波形
+
+            const now = audioCtx.currentTime;
+            
+            // 音量包絡線 (Attack, Decay, Sustain, Release) 模擬撥弦或吹管樂器
+            gainNode.gain.setValueAtTime(0, now);
+            gainNode.gain.linearRampToValueAtTime(0.15, now + 0.5); // 緩慢漸入
+            gainNode.gain.exponentialRampToValueAtTime(0.001, now + 4); // 緩慢消音
+
+            osc.start(now);
+            osc.stop(now + 4);
+
+            // 隨機安排下一個音符的播放時間
+            const nextNoteDelay = Math.random() * 1500 + 500;
+            setTimeout(playGenerativeMusic, nextNoteDelay);
+        }
+
+        // Canvas 動畫循環
+        function animate(time) {
+            if (!isARRunning) return;
+            requestAnimationFrame(animate);
+
+            ctx.clearRect(0, 0, width, height);
+
+            if (!isVanishing) {
+                // 隨時間加快生成速度，像螞蟻大軍一樣湧現
+                if (time - lastSpawnTime > spawnIntervalTime) {
+                    spawnPerson();
+                    lastSpawnTime = time;
+                    // 每次生成後，間隔時間減少 (越來越快)，最低 15 毫秒生一隻
+                    spawnIntervalTime = Math.max(15, spawnIntervalTime * 0.92); 
+                }
+
+                // 檢查是否達到滿溢數量，達到則進入消散階段
+                if (inkPeople.length >= MAX_PEOPLE) {
+                    isVanishing = true;
+                    vanishStartTime = time;
+                }
+            } else {
+                // 消散階段：在 5 秒內根據時間進度，將數量減少到 0
+                const elapsed = time - vanishStartTime;
+                const progress = Math.min(elapsed / VANISH_DURATION, 1);
+                const targetCount = Math.floor(MAX_PEOPLE * (1 - progress));
+
+                // 隨機移除陣列中的人偶，直到符合目前的目標數量
+                // (使用隨機移除能讓消失的視覺效果像墨水隨機揮發一樣自然)
+                while (inkPeople.length > targetCount) {
+                    const removeIndex = Math.floor(Math.random() * inkPeople.length);
+                    inkPeople.splice(removeIndex, 1);
+                }
+            }
+
+            inkPeople.forEach(p => {
+                // 往目標移動
+                const dx = p.targetX - p.x;
+                const dy = p.targetY - p.y;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist < 5) {
+                    // 到達目標，指派新目標 (隨機亂竄)
+                    p.targetX = p.x + (Math.random() - 0.5) * 150;
+                    p.targetY = p.y + (Math.random() - 0.5) * 150;
+                } else {
+                    p.x += (dx / dist) * p.speed;
+                    p.y += (dy / dist) * p.speed;
+                }
+
+                // 防止跑出螢幕外太遠
+                if (p.x < -20 || p.x > width + 20 || p.y < -20 || p.y > height + 20) {
+                    p.targetX = width / 2;
+                    p.targetY = height / 2;
+                }
+
+                // 如果圖片已載入，繪製 Sprite 動態
+                if (frameWidth > 0) {
+                    // 計算目前應該播放哪一個 Frame (每 100 毫秒切換一格，並加上隨機偏移量讓大家動作不同步)
+                    const currentFrame = (Math.floor(time / 100) + p.frameOffset) % totalFrames;
+                    
+                    const ratio = frameHeight / frameWidth;
+                    const drawWidth = p.size;
+                    const drawHeight = p.size * ratio;
+                    const isMovingLeft = dx < 0; // 判斷是否向左移動
+
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    
+                    // 如果向左走，則水平翻轉畫布
+                    if (isMovingLeft) {
+                        ctx.scale(-1, 1);
+                    }
+
+                    // 繪製當前幀的圖片
+                    ctx.drawImage(
+                        spriteImage,
+                        currentFrame * frameWidth, 0, // 來源 X, Y
+                        frameWidth, frameHeight,      // 來源寬高
+                        -drawWidth / 2, -drawHeight / 2, // 畫布上的繪製起點 (置中)
+                        drawWidth, drawHeight         // 畫布上的繪製寬高
+                    );
+                    
+                    ctx.restore();
+                }
+            });
+        }
+
+        // 生成單個小人偶
+        function spawnPerson() {
+            if (!isARRunning || isVanishing) return;
+            if (inkPeople.length >= MAX_PEOPLE) return; // 限制最大數量
+
+            inkPeople.push({
+                x: Math.random() * width,
+                y: Math.random() * height,
+                targetX: Math.random() * width,
+                targetY: Math.random() * height,
+                size: Math.random() * 15 + 15, // 調整大小 (15px ~ 30px)
+                speed: Math.random() * 1.5 + 0.5,
+                frameOffset: Math.floor(Math.random() * totalFrames) // 隨機初始幀，讓大家動作不會完全同步
+            });
+        }
+
+        // 啟動整個體驗流程
+        startBtn.addEventListener('click', async () => {
+            startScreen.classList.add('hidden');
+            scanScreen.classList.remove('hidden');
+            scanScreen.classList.add('flex');
+            scanBox.style.display = 'block';
+
+            const cameraReady = await startCamera();
+
+            if (cameraReady) {
+                // 模擬掃描過程 (3秒後觸發)
+                setTimeout(() => {
+                    scanBox.style.display = 'none';
+                    statusText.classList.remove('animate-pulse');
+                    statusText.innerText = "已喚醒畫中精靈";
+                    statusText.style.color = "#4ade80";
+
+                    setTimeout(() => {
+                        scanScreen.classList.add('hidden');
+                        
+                        // 正式進入 AR 動態狀態
+                        isARRunning = true;
+                        initAudio(); // 啟動音樂
+                        
+                        // 啟動 Canvas 動畫，開始生成大軍
+                        lastSpawnTime = performance.now();
+                        requestAnimationFrame(animate);
+
+                    }, 1500);
+
+                }, 3000);
+            } else {
+                statusText.innerText = "無法存取相機，請重新整理重試。";
+                statusText.style.color = "#ef4444";
+            }
+        });
+
+    </script>
+</body>
+</html>
