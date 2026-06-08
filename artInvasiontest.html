@@ -1,0 +1,407 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>純 Canvas 數據入侵 (五連屏展示版)</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: "Microsoft JhengHei", sans-serif;
+        }
+
+        #canvas-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        /* 隱藏所有的資源載體，我們只取數據，全部交給 Canvas 畫 */
+        .hidden-resource {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* 唯一的互動與顯示畫布 */
+        #artCanvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            /* 鏡像翻轉，讓體感操作像照鏡子，注意：背景影片也會跟著左右翻轉 */
+            transform: scaleX(-1); 
+        }
+
+        /* 除錯小視窗 */
+        #previewContainer {
+            position: absolute; bottom: 20px; right: 20px; width: 160px; height: 120px;
+            border: 2px solid #555; background: #000; z-index: 50; transform: scaleX(-1);
+        }
+        #debugCanvas { width: 100%; height: 100%; }
+        .preview-label { position: absolute; bottom: 145px; right: 20px; color: #aaa; font-size: 12px; z-index: 51; }
+
+        /* UI 介面 */
+        #ui-panel {
+            position: absolute; bottom: 20px; left: 20px; background: rgba(0, 0, 0, 0.85);
+            color: white; padding: 20px; border-radius: 12px; border: 1px solid #555;
+            max-width: 320px; z-index: 10; box-shadow: 0 0 20px rgba(0,255,157,0.2);
+        }
+
+        .btn {
+            background: #ff0055; color: white; border: none; padding: 12px; border-radius: 5px;
+            cursor: pointer; font-size: 16px; margin-top: 10px; width: 100%; font-weight: bold; transition: 0.2s;
+        }
+        .btn:hover { background: #ff3377; }
+
+        #loading {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 100; display: flex; flex-direction: column; 
+            justify-content: center; align-items: center; color: #00ff9d;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading">
+        <h2>系統初始化中...</h2>
+        <p id="loading-text">正在連接攝影機與影片</p>
+    </div>
+
+    <!-- 隱藏的資源區：存放要交給 Canvas 繪製的影片 -->
+    <div class="hidden-resource">
+        <!-- 攝影機視訊 -->
+        <video id="webcamVideo" autoplay playsinline muted></video>
+        
+        <!-- 背景五連屏影片 (請替換 src) -->
+        <video id="bg-vid-0" src="video1.mp4" autoplay loop muted playsinline></video>
+        <video id="bg-vid-1" src="video2.mp4" autoplay loop muted playsinline></video>
+        <video id="bg-vid-2" src="video3.mp4" autoplay loop muted playsinline></video>
+        <video id="bg-vid-3" src="video4.mp4" autoplay loop muted playsinline></video>
+        <video id="bg-vid-4" src="video5.mp4" autoplay loop muted playsinline></video>
+    </div>
+
+    <div id="canvas-container">
+        <!-- 唯一的大畫布 -->
+        <canvas id="artCanvas"></canvas>
+
+        <div class="preview-label">原始訊號監控</div>
+        <div id="previewContainer">
+            <canvas id="debugCanvas"></canvas>
+        </div>
+
+        <div id="ui-panel">
+            <h1 style="margin:0;color:#00ff9d;font-size:18px;">數據入侵 (純 Canvas 五連屏)</h1>
+            <p style="color:#ccc;font-size:12px;">1. 請先離開鏡頭範圍 <br> 2. 點擊鎖定背景 <br> 3. 走入畫面測試</p>
+
+            <button class="btn" id="captureBtn">📸 鎖定背景 (校正)</button>
+
+            <div style="margin-top:15px;">
+                <p style="margin:5px 0;font-size:12px;">靈敏度: <span id="threshVal">30</span></p>
+                <input type="range" id="thresholdSlider" min="5" max="80" value="30" style="width:100%">
+            </div>
+            <p style="margin-top:10px;font-size:12px;">入侵數量: <span id="count" style="color:#00ff9d;font-weight:bold;">0</span></p>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 【圖片與變色設定區】
+        // ==========================================
+        const spriteImage = new Image();
+        spriteImage.src = 'Sprite.png'; // 確保您的圖片叫這個名字
+        const TOTAL_FRAMES = 8;
+        const ANIMATION_SPEED = 5;
+        let singleFrameWidth = 0;
+        let imageLoaded = false;
+
+        let redSpriteCanvas = document.createElement('canvas');
+        let redCtx = redSpriteCanvas.getContext('2d');
+
+        spriteImage.onload = () => {
+            imageLoaded = true;
+            singleFrameWidth = spriteImage.naturalWidth / TOTAL_FRAMES;
+            
+            redSpriteCanvas.width = spriteImage.naturalWidth;
+            redSpriteCanvas.height = spriteImage.naturalHeight;
+            redCtx.drawImage(spriteImage, 0, 0);
+            redCtx.globalCompositeOperation = 'source-atop';
+            redCtx.fillStyle = '#8B0000'; // 深紅色
+            redCtx.fillRect(0, 0, redSpriteCanvas.width, redSpriteCanvas.height);
+        };
+
+        // ==========================================
+        // 初始化 Canvas 與資源
+        // ==========================================
+        const canvas = document.getElementById('artCanvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('webcamVideo');
+        
+        // 抓取五支背景影片
+        const bgVideos = [];
+        for(let i = 0; i < 5; i++) {
+            bgVideos.push(document.getElementById(`bg-vid-${i}`));
+        }
+
+        const loadingScreen = document.getElementById('loading');
+        const loadingText = document.getElementById('loading-text');
+        const captureBtn = document.getElementById('captureBtn');
+        const debugCanvas = document.getElementById('debugCanvas');
+        const debugCtx = debugCanvas.getContext('2d');
+
+        const PROC_W = 160;
+        const PROC_H = 120;
+        debugCanvas.width = PROC_W;
+        debugCanvas.height = PROC_H;
+
+        const procCanvas = document.createElement('canvas');
+        procCanvas.width = PROC_W;
+        procCanvas.height = PROC_H;
+        const procCtx = procCanvas.getContext('2d');
+
+        let width, height;
+        let particles = [];
+        let backgroundData = null;
+        let isBackgroundCaptured = false;
+
+        async function initWebcam() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 }
+                });
+                video.srcObject = stream;
+
+                video.onloadedmetadata = () => {
+                    video.play();
+                    resize();
+                    loadingText.innerText = "系統啟動！";
+                    setTimeout(() => { loadingScreen.style.display = 'none'; }, 500);
+                };
+            } catch (err) {
+                console.error(err);
+                loadingText.innerHTML = "<span style='color:red'>錯誤：無法讀取攝影機<br>請檢查瀏覽器權限</span>";
+            }
+        }
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+        window.addEventListener('resize', resize);
+        initWebcam();
+
+        captureBtn.addEventListener('click', () => {
+            if (video.readyState !== 4) return;
+            procCtx.drawImage(video, 0, 0, PROC_W, PROC_H);
+            backgroundData = procCtx.getImageData(0, 0, PROC_W, PROC_H).data;
+            isBackgroundCaptured = true;
+            captureBtn.innerText = "🔄 重新校正背景";
+            captureBtn.style.background = "#555";
+            particles = [];
+        });
+
+        // ==========================================
+        // 核心演算法：模擬 object-fit: cover 的 Canvas 影片繪製
+        // ==========================================
+        function drawVideoCover(ctx, video, x, y, w, h) {
+            // 確認影片已載入且有長寬數據
+            if (video.videoWidth === 0 || video.videoHeight === 0) return; 
+
+            const videoRatio = video.videoWidth / video.videoHeight;
+            const targetRatio = w / h;
+            let sourceX = 0, sourceY = 0, sourceW = video.videoWidth, sourceH = video.videoHeight;
+
+            // 計算裁切比例以填滿畫面
+            if (videoRatio > targetRatio) {
+                sourceW = video.videoHeight * targetRatio;
+                sourceX = (video.videoWidth - sourceW) / 2;
+            } else {
+                sourceH = video.videoWidth / targetRatio;
+                sourceY = (video.videoHeight - sourceH) / 2;
+            }
+
+            // 繪製裁切後的影片
+            ctx.drawImage(video, sourceX, sourceY, sourceW, sourceH, x, y, w, h);
+        }
+
+        // ==========================================
+        // 人偶類別
+        // ==========================================
+        class Avatar {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.targetBaseHeight = 40; 
+                this.sizeVariation = Math.random() * 0.5 + 0.6;
+                this.opacity = 0;
+                this.life = 60; 
+                this.currentFrame = Math.floor(Math.random() * TOTAL_FRAMES);
+                this.frameTimer = 0;
+                this.isDispersing = false;
+                this.redness = 0; 
+            }
+
+            update() {
+                if (this.isDispersing) {
+                    this.x += this.vx * 6;
+                    this.y += this.vy * 6;
+                    this.opacity -= 0.1;
+                    this.life = 0;
+                } else {
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    if (this.opacity < 1) this.opacity += 0.2;
+                    this.life--;
+                }
+                
+                if (this.redness < 1) this.redness += 0.02;
+
+                this.frameTimer++;
+                if (this.frameTimer % ANIMATION_SPEED === 0) {
+                    this.currentFrame = (this.currentFrame + 1) % TOTAL_FRAMES;
+                }
+            }
+
+            draw() {
+                if (this.opacity <= 0) return;
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                if (imageLoaded) {
+                    let ratio = singleFrameWidth / spriteImage.naturalHeight;
+                    let finalH = this.targetBaseHeight * this.sizeVariation;
+                    let finalW = finalH * ratio;
+                    let sourceX = this.currentFrame * singleFrameWidth;
+
+                    // 1. 畫原色人偶
+                    ctx.globalAlpha = this.opacity;
+                    ctx.drawImage(spriteImage, sourceX, 0, singleFrameWidth, spriteImage.naturalHeight, -finalW / 2, -finalH / 2, finalW, finalH);
+                    
+                    // 2. 疊加紅色渲染層
+                    if (this.redness > 0) {
+                        ctx.globalAlpha = this.opacity * this.redness;
+                        ctx.drawImage(redSpriteCanvas, sourceX, 0, singleFrameWidth, spriteImage.naturalHeight, -finalW / 2, -finalH / 2, finalW, finalH);
+                    }
+                } else {
+                    ctx.globalAlpha = this.opacity;
+                    ctx.fillStyle = '#ff0055';
+                    ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
+                }
+                ctx.restore();
+            }
+        }
+
+        let threshold = 30;
+        document.getElementById('thresholdSlider').addEventListener('input', (e) => {
+            threshold = parseInt(e.target.value);
+            document.getElementById('threshVal').innerText = threshold;
+        });
+
+        // ==========================================
+        // 主循環動畫
+        // ==========================================
+        function animate() {
+            // --- 第一階段：繪製背景影片 (五連屏) ---
+            ctx.clearRect(0, 0, width, height);
+            
+            ctx.save();
+            // 在 Canvas 直接套用水墨濾鏡，這樣不用依賴 CSS
+            ctx.filter = 'sepia(0.2) grayscale(0.8) contrast(1.2)';
+            
+            const colWidth = width / 5; // 計算每個欄位的寬度
+            for(let i = 0; i < 5; i++) {
+                const bgVid = bgVideos[i];
+                if (bgVid && bgVid.readyState >= 2) {
+                    // 使用我們自訂的 Cover 演算法把影片畫進欄位中
+                    drawVideoCover(ctx, bgVid, i * colWidth, 0, colWidth, height);
+                }
+                
+                // 畫分割線 (除了第一欄之外)
+                if (i > 0) {
+                    ctx.beginPath();
+                    ctx.moveTo(i * colWidth, 0);
+                    ctx.lineTo(i * colWidth, height);
+                    ctx.strokeStyle = 'rgba(255,255,255,0.1)'; // 極淡的分割線
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+            }
+            ctx.restore(); // 關閉濾鏡，確保後面的「人偶」不會被變成黑白水墨
+
+
+            // --- 第二階段：處理互動與偵測 ---
+            if (video.readyState === 4) {
+                procCtx.drawImage(video, 0, 0, PROC_W, PROC_H);
+                debugCtx.drawImage(video, 0, 0, PROC_W, PROC_H);
+
+                if (isBackgroundCaptured && backgroundData) {
+                    const frameData = procCtx.getImageData(0, 0, PROC_W, PROC_H).data;
+                    const bg = backgroundData;
+
+                    for (let y = 0; y < PROC_H; y += 4) {
+                        for (let x = 0; x < PROC_W; x += 4) {
+                            const i = (y * PROC_W + x) * 4;
+                            const diff = Math.abs(frameData[i] - bg[i]) + Math.abs(frameData[i + 1] - bg[i + 1]) + Math.abs(frameData[i + 2] - bg[i + 2]);
+
+                            if (diff > threshold * 3) {
+                                const screenX = (x / PROC_W) * width;
+                                const screenY = (y / PROC_H) * height;
+
+                                if (Math.random() < 0.3) {
+                                    particles.push(new Avatar(screenX + (Math.random() - 0.5) * 20, screenY + (Math.random() - 0.5) * 20));
+                                }
+
+                                if (diff > threshold * 10) {
+                                    repelParticles(screenX, screenY);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- 第三階段：繪製數據人偶 ---
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                particles[i].draw();
+                if (particles[i].opacity <= 0) particles.splice(i, 1);
+            }
+
+            if (particles.length > 800) particles.splice(0, 20);
+            document.getElementById('count').innerText = particles.length;
+
+            requestAnimationFrame(animate);
+        }
+
+        function repelParticles(x, y) {
+            particles.forEach(p => {
+                const dx = p.x - x;
+                const dy = p.y - y;
+                if (dx * dx + dy * dy < 20000) {
+                    p.isDispersing = true;
+                    p.vx = dx * 0.1;
+                    p.vy = dy * 0.1;
+                }
+            });
+        }
+
+        // 啟動動畫迴圈
+        animate();
+    </script>
+</body>
+</html>
