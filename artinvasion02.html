@@ -1,0 +1,192 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>水墨畫 AR 互動體驗</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'PingFang TC', sans-serif;
+        }
+
+        #video-element, #bg-video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #bg-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            display: none;
+        }
+
+        #ink-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .start-btn {
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <video id="video-element" autoplay playsinline muted></video>
+    <!-- 若檔案不存在，將觸發 onerror 事件並隱藏 -->
+    <video id="bg-video" src="background.mp4" loop muted playsinline style="display: none;" onerror="this.style.display='none'; document.getElementById('bg-canvas').style.display='block';"></video>
+    <canvas id="bg-canvas"></canvas>
+    <canvas id="ink-canvas"></canvas>
+
+    <div id="ui-layer">
+        <div id="start-screen" class="flex flex-col items-center">
+            <h1 class="text-3xl font-bold text-white mb-6">水墨幻境 AR</h1>
+            <button id="start-btn" class="start-btn bg-white/20 text-white px-8 py-4 rounded-full font-bold hover:bg-white/40 transition">開啟相機並凍結畫作</button>
+        </div>
+    </div>
+
+    <script>const video = document.getElementById('video-element');
+        const bgVideo = document.getElementById('bg-video');
+        const bgCanvas = document.getElementById('bg-canvas');
+        const bgCtx = bgCanvas.getContext('2d');
+        const inkCanvas = document.getElementById('ink-canvas');
+        const inkCtx = inkCanvas.getContext('2d');
+
+        let isARRunning = false;
+        let audioCtx;
+        const spriteImage = new Image();
+        spriteImage.src = 'Sprite2.png';
+        const totalFrames = 8;
+        let frameWidth = 0, frameHeight = 0;
+        spriteImage.onload = () => { frameWidth = spriteImage.width / totalFrames; frameHeight = spriteImage.height; };
+
+        let inkPeople = [];
+        const MAX_PEOPLE = 700;
+        let isVanishing = false;
+        let vanishStartTime = 0;
+        let lastSpawnTime = 0;
+
+        function initAudio() {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            playNatureSound();
+        }
+
+        function playNatureSound() {
+            if (!isARRunning) return;
+            if (Math.random() > 0.6) {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1200 + Math.random() * 800, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+                osc.connect(gain).connect(audioCtx.destination);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+            }
+            setTimeout(playNatureSound, 2000 + Math.random() * 2000);
+        }
+
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(stream => video.srcObject = stream);
+
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.getElementById('start-screen').style.display = 'none';
+
+            bgCanvas.style.display = 'block';
+            bgCanvas.width = video.videoWidth;
+            bgCanvas.height = video.videoHeight;
+            bgCtx.drawImage(video, 0, 0, bgCanvas.width, bgCanvas.height);
+            video.style.display = 'none';
+
+            setTimeout(() => {
+                bgCanvas.style.display = 'none';
+                bgVideo.style.display = 'block';
+                bgVideo.play().catch(() => {
+                    // 如果影片播放失敗，確保背景畫布回顯
+                    bgVideo.style.display = 'none';
+                    bgCanvas.style.display = 'block';
+                });
+
+                isARRunning = true;
+                initAudio();
+                inkCanvas.width = window.innerWidth;
+                inkCanvas.height = window.innerHeight;
+                requestAnimationFrame(animate);
+            }, 2000);
+        });
+
+        function animate(time) {
+            if (!isARRunning) return;
+            requestAnimationFrame(animate);
+            inkCtx.clearRect(0, 0, inkCanvas.width, inkCanvas.height);
+
+            if (!isVanishing) {
+                if (inkPeople.length < MAX_PEOPLE) {
+                    if (time - lastSpawnTime > 15) {
+                        spawnPerson();
+                        lastSpawnTime = time;
+                    }
+                } else {
+                    isVanishing = true;
+                    vanishStartTime = time;
+                }
+            } else {
+                const elapsed = time - vanishStartTime;
+                const progress = Math.min(elapsed / 5000, 1);
+                const targetCount = Math.floor(MAX_PEOPLE * (1 - progress));
+                if (inkPeople.length > targetCount) inkPeople.splice(0, inkPeople.length - targetCount);
+            }
+
+            inkPeople.forEach(p => {
+                p.x += (p.targetX - p.x) * 0.05;
+                p.y += (p.targetY - p.y) * 0.05;
+                if (Math.abs(p.targetX - p.x) < 5) p.targetX = Math.random() * inkCanvas.width;
+                if (Math.abs(p.targetY - p.y) < 5) p.targetY = Math.random() * inkCanvas.height;
+                const frame = (Math.floor(time / 100) + p.frameOffset) % totalFrames;
+                const direction = p.targetX > p.x ? 1 : -1;
+                inkCtx.save();
+                inkCtx.translate(p.x, p.y);
+                inkCtx.scale(direction, 1);
+                inkCtx.drawImage(spriteImage, frame * frameWidth, 0, frameWidth, frameHeight, -20, -20, 40, 40);
+                inkCtx.restore();
+            });
+        }
+
+        function spawnPerson() {
+            inkPeople.push({ x: Math.random() * inkCanvas.width, y: Math.random() * inkCanvas.height, targetX: Math.random() * inkCanvas.width, targetY: Math.random() * inkCanvas.height, frameOffset: Math.floor(Math.random() * totalFrames) });
+        }</script>
+</body>
+</html>
