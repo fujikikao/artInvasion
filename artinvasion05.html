@@ -16,7 +16,7 @@
             font-family: 'PingFang TC', sans-serif;
         }
 
-        #video-element, #bg-video {
+        #video-element {
             position: absolute;
             top: 0;
             left: 0;
@@ -67,8 +67,6 @@
 <body>
 
     <video id="video-element" autoplay playsinline muted></video>
-    <!-- 若檔案不存在，將觸發 onerror 事件並隱藏 -->
-    <video id="bg-video" src="background.mp4" loop muted playsinline style="display: none;" onerror="this.style.display='none'; document.getElementById('bg-canvas').style.display='block';"></video>
     <canvas id="bg-canvas"></canvas>
     <canvas id="ink-canvas"></canvas>
 
@@ -80,7 +78,6 @@
     </div>
 
     <script>const video = document.getElementById('video-element');
-        const bgVideo = document.getElementById('bg-video');
         const bgCanvas = document.getElementById('bg-canvas');
         const bgCtx = bgCanvas.getContext('2d');
         const inkCanvas = document.getElementById('ink-canvas');
@@ -125,27 +122,19 @@
         document.getElementById('start-btn').addEventListener('click', () => {
             document.getElementById('start-screen').style.display = 'none';
 
+            // 凍結當前畫面
             bgCanvas.style.display = 'block';
             bgCanvas.width = video.videoWidth;
             bgCanvas.height = video.videoHeight;
             bgCtx.drawImage(video, 0, 0, bgCanvas.width, bgCanvas.height);
             video.style.display = 'none';
 
-            setTimeout(() => {
-                bgCanvas.style.display = 'none';
-                bgVideo.style.display = 'block';
-                bgVideo.play().catch(() => {
-                    // 如果影片播放失敗，確保背景畫布回顯
-                    bgVideo.style.display = 'none';
-                    bgCanvas.style.display = 'block';
-                });
-
-                isARRunning = true;
-                initAudio();
-                inkCanvas.width = window.innerWidth;
-                inkCanvas.height = window.innerHeight;
-                requestAnimationFrame(animate);
-            }, 2000);
+            // 直接啟動互動機制
+            isARRunning = true;
+            initAudio();
+            inkCanvas.width = window.innerWidth;
+            inkCanvas.height = window.innerHeight;
+            requestAnimationFrame(animate);
         });
 
         function animate(time) {
