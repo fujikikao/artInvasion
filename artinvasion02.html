@@ -22,7 +22,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
         }
 
         #bg-canvas {
@@ -67,8 +67,7 @@
 <body>
 
     <video id="video-element" autoplay playsinline muted></video>
-    <!-- 若檔案不存在，將觸發 onerror 事件並隱藏 -->
-    <video id="bg-video" src="background.mp4" loop muted playsinline style="display: none;" onerror="this.style.display='none'; document.getElementById('bg-canvas').style.display='block';"></video>
+    <video id="bg-video" src="ink02.mp4" loop muted playsinline style="display: none;"></video>
     <canvas id="bg-canvas"></canvas>
     <canvas id="ink-canvas"></canvas>
 
@@ -125,21 +124,23 @@
         document.getElementById('start-btn').addEventListener('click', () => {
             document.getElementById('start-screen').style.display = 'none';
 
+            // 1. 凍結當前畫面
             bgCanvas.style.display = 'block';
             bgCanvas.width = video.videoWidth;
             bgCanvas.height = video.videoHeight;
             bgCtx.drawImage(video, 0, 0, bgCanvas.width, bgCanvas.height);
             video.style.display = 'none';
 
+            // 2. 等待 2 秒後切換到影片
             setTimeout(() => {
                 bgCanvas.style.display = 'none';
                 bgVideo.style.display = 'block';
                 bgVideo.play().catch(() => {
-                    // 如果影片播放失敗，確保背景畫布回顯
                     bgVideo.style.display = 'none';
                     bgCanvas.style.display = 'block';
                 });
 
+                // 3. 啟動互動機制
                 isARRunning = true;
                 initAudio();
                 inkCanvas.width = window.innerWidth;
