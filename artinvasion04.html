@@ -22,7 +22,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
         }
 
         #bg-canvas {
@@ -31,6 +31,7 @@
             left: 0;
             width: 100%;
             height: 100%;
+            object-fit: contain;
             z-index: 2;
             display: none;
         }
@@ -67,8 +68,7 @@
 <body>
 
     <video id="video-element" autoplay playsinline muted></video>
-    <!-- 若檔案不存在，將觸發 onerror 事件並隱藏 -->
-    <video id="bg-video" src="background.mp4" loop muted playsinline style="display: none;" onerror="this.style.display='none'; document.getElementById('bg-canvas').style.display='block';"></video>
+    <video id="bg-video" src="ink04.mp4" loop playsinline style="display: none;"></video>
     <canvas id="bg-canvas"></canvas>
     <canvas id="ink-canvas"></canvas>
 
@@ -102,22 +102,20 @@
 
         function initAudio() {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            playNatureSound();
         }
 
-        function playNatureSound() {
-            if (!isARRunning) return;
-            if (Math.random() > 0.6) {
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(1200 + Math.random() * 800, audioCtx.currentTime);
-                gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
-                osc.connect(gain).connect(audioCtx.destination);
-                osc.start(); osc.stop(audioCtx.currentTime + 0.2);
-            }
-            setTimeout(playNatureSound, 2000 + Math.random() * 2000);
+        function playSpriteSound() {
+            if (!audioCtx) return;
+            // 產生精靈出現的靈動音效
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(400 + Math.random() * 600, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
         }
 
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(stream => video.srcObject = stream);
@@ -134,11 +132,8 @@
             setTimeout(() => {
                 bgCanvas.style.display = 'none';
                 bgVideo.style.display = 'block';
-                bgVideo.play().catch(() => {
-                    // 如果影片播放失敗，確保背景畫布回顯
-                    bgVideo.style.display = 'none';
-                    bgCanvas.style.display = 'block';
-                });
+                bgVideo.muted = false; // 開啟影片聲音
+                bgVideo.play().catch(e => console.log("影片播放受限:", e));
 
                 isARRunning = true;
                 initAudio();
@@ -155,8 +150,9 @@
 
             if (!isVanishing) {
                 if (inkPeople.length < MAX_PEOPLE) {
-                    if (time - lastSpawnTime > 15) {
+                    if (time - lastSpawnTime > 30) { // 稍微放慢生成頻率以平衡聲音
                         spawnPerson();
+                        playSpriteSound(); // 播放生成音效
                         lastSpawnTime = time;
                     }
                 } else {
@@ -173,6 +169,7 @@
             inkPeople.forEach(p => {
                 p.x += (p.targetX - p.x) * 0.05;
                 p.y += (p.targetY - p.y) * 0.05;
+                if (p.currentSize > p.targetSize) p.currentSize -= 0.2;
                 if (Math.abs(p.targetX - p.x) < 5) p.targetX = Math.random() * inkCanvas.width;
                 if (Math.abs(p.targetY - p.y) < 5) p.targetY = Math.random() * inkCanvas.height;
                 const frame = (Math.floor(time / 100) + p.frameOffset) % totalFrames;
@@ -180,13 +177,13 @@
                 inkCtx.save();
                 inkCtx.translate(p.x, p.y);
                 inkCtx.scale(direction, 1);
-                inkCtx.drawImage(spriteImage, frame * frameWidth, 0, frameWidth, frameHeight, -20, -20, 40, 40);
+                inkCtx.drawImage(spriteImage, frame * frameWidth, 0, frameWidth, frameHeight, -p.currentSize / 2, -p.currentSize / 2, p.currentSize, p.currentSize);
                 inkCtx.restore();
             });
         }
 
         function spawnPerson() {
-            inkPeople.push({ x: Math.random() * inkCanvas.width, y: Math.random() * inkCanvas.height, targetX: Math.random() * inkCanvas.width, targetY: Math.random() * inkCanvas.height, frameOffset: Math.floor(Math.random() * totalFrames) });
+            inkPeople.push({ x: Math.random() * inkCanvas.width, y: Math.random() * inkCanvas.height, targetX: Math.random() * inkCanvas.width, targetY: Math.random() * inkCanvas.height, frameOffset: Math.floor(Math.random() * totalFrames), currentSize: 120, targetSize: 40 });
         }</script>
 </body>
 </html>
